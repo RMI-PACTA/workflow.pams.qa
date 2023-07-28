@@ -1,0 +1,5 @@
+default:
+
+    paths:
+        path_pams_base: /PATH/TO/BASE/PAMS.xlsx
+        path_pams_compare: /PATH/TO/COMPARISON/PAMS.xlsx
