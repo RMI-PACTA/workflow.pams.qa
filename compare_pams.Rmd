@@ -1,0 +1,37 @@
+---
+title: "Compare Two PAMS Deliveries"
+author: "Jackson Hoffart"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+config <- config::get()
+
+library(pacta.data.preparation)
+```
+
+## Introduction
+
+We will begin a comparison of two different PAMS datasets. We will compare a "base" dataset to a proposed new dataset (here called "comparison"). We will then assess various expectations (e.g. "We expect the different available values of `sector` to be identical", or "We expect that global production should not have changed by more than 10%").
+
+The end of the report will display a concise summary of each expectation, and if it was met or not. 
+
+This workflow is meant to grow as we identify weird and confusing differences in the datasets, so that we can more easily automate all of our production code that is based on PAMS. 
+
+## Load Data
+
+Load up the data. 
+
+```{r}
+# set paths
+base_pams_path <- config$paths$path_pams_base
+comparison_pams_path <- config$paths$path_pams_compare
+
+# FIXME: There seem to already be differences in the PAMS datasets between 
+# 2021Q4 and 2022Q4 that prevent this function from working for both
+
+# base_pams <- import_ar_advanced_company_indicators(base_pams_path)
+# comparison_pams <- import_ar_advanced_company_indicators(comparison_pams_path)
+```
