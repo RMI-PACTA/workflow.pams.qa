@@ -49,4 +49,4 @@ po/*~
 rsconnect/
 
 # Ignore the `.yml` file
-# config.yml
+config.yml
