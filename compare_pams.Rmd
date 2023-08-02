@@ -24,7 +24,7 @@ knitr::knit_hooks$set(
            '</div>', sep = '\n')
    },
    message = function(x, options) {
-     paste('\n\n<div class="alert alert-info">',
+     paste('\n\n<div class="alert alert-success">',
            gsub('##', '\n \u2714', x),
            '</div>', sep = '\n')
    }
