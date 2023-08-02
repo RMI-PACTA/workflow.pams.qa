@@ -1,8 +1,8 @@
 default:
 
     paths:
-        path_pams_base: /Users/jdhoffa/Downloads/qa/2022-08-24_AR_2021Q4_RMI-Company-Indicators.xlsx
-        path_pams_compare: /Users/jdhoffa/Downloads/qa/2023-02-15_AI_RMI_Advanced Company Indicators_2022Q4.xlsx
+        path_pams_base: /PATH/TO/BASE_PAMS.xlsx
+        path_pams_compare: /PATH/TO/COMPARE_PAMS.xlsx
 
     thresholds:
         company_id_threshold: 25
