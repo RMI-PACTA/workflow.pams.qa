@@ -249,7 +249,7 @@ if (length(gained_sectors) != 0) {
   warning(glue::glue("We gained the following sectors: {gained_sectors}"))
 }
 
-if (length(gained_sectors) == 0 && length(lost_sectors)) {
+if (length(gained_sectors) == 0 && length(lost_sectors) == 0) {
   message("Sectors are identical between datasets")
 }
 
