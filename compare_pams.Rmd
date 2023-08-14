@@ -234,7 +234,7 @@ for (sector in unique(sector_expectation$`Asset Sector`)) {
 
 We expect that the total possible options for Sector and Technology are identical between the two datasets. If there are any gained or dropped levels here, we want to know about it. 
 
-``` {r sectors}
+``` {r sectors, echo = FALSE}
 sectors_base <- unique(base_pams$`Asset Sector`)
 sectors_compare <- unique(comparison_pams$`Asset Sector`)
 
