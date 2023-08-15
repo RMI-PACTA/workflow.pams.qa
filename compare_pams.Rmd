@@ -1,37 +1,294 @@
 ---
-title: "Compare Two PAMS Deliveries"
+title: "Status Report - PAMS Comparison"
 author: "Jackson Hoffart"
-date: "`r Sys.Date()`"
-output: html_document
+date: \today
+output: 
+  html_document:
+      toc: true
+      toc_depth: 2
+      theme: flatly
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+knitr::knit_hooks$set(
+   error = function(x, options) {
+     paste('\n\n<div class="alert alert-danger">',
+           gsub('##', '\n', gsub('^##\ Error', '\u2716 **Error**', x)),
+           '</div>', sep = '\n')
+   },
+   warning = function(x, options) {
+     paste('\n\n<div class="alert alert-danger">',
+           gsub('##', '\n', gsub('^##\ Warning:', '\u2716 **Warning**', x)),
+           '</div>', sep = '\n')
+   },
+   message = function(x, options) {
+     paste('\n\n<div class="alert alert-success">',
+           gsub('##', '\n \u2714', x),
+           '</div>', sep = '\n')
+   }
+)
+
+
 config <- config::get()
 
+# set configs
+base_pams_path <- config$paths$path_pams_base
+comparison_pams_path <- config$paths$path_pams_compare
+company_id_threshold <- config$thresholds$company_id_threshold
+sectoral_production_threshold <- config$thresholds$sectoral_production_threshold
+
+library(dplyr)
+library(tibble)
+library(readxl)
+library(tidyr)
+library(glue)
 library(pacta.data.preparation)
 ```
 
 ## Introduction
 
-We will begin a comparison of two different PAMS datasets. We will compare a "base" dataset to a proposed new dataset (here called "comparison"). We will then assess various expectations (e.g. "We expect the different available values of `sector` to be identical", or "We expect that global production should not have changed by more than 10%").
+This report compares two input PAMS datasets: `base_pams` and `comparison_pams` to ensure quality assurance. We will test various expectations between the datasets to identify any unexpected differences or inconsistencies.
 
-The end of the report will display a concise summary of each expectation, and if it was met or not. 
-
-This workflow is meant to grow as we identify weird and confusing differences in the datasets, so that we can more easily automate all of our production code that is based on PAMS. 
+Some differences are of course expected between deliveries, which is why we introduce threshold limits. Thresholds can be set up-front in the `config.yml` file. 
 
 ## Load Data
 
-Load up the data. 
+The PAMS dataset has changed format between 2022Q4 and 2021Q4. Because of this, the function `pacta.data.preparation::import_ar_advanced_company_indicators()` will only work on the latest 2022Q4 data. The main missing sheet between these releases is the "Company Ownership" sheet. As such, we will create a slight variation of this import function that doesn't compare the missing sheet.
 
-```{r}
-# set paths
-base_pams_path <- config$paths$path_pams_base
-comparison_pams_path <- config$paths$path_pams_compare
+When using this workflow in the future, it should be explored if comparison metrics should be included to assess differences in the "Company Ownership" sheet. 
 
-# FIXME: There seem to already be differences in the PAMS datasets between 
-# 2021Q4 and 2022Q4 that prevent this function from working for both
+```{r import, echo = FALSE}
+import_ar_advanced_company_indicators_no_ownership <- function(filepath, 
+                                                               drop_nas = TRUE, 
+                                                               fix_names = FALSE) {
+  
+  sheet_names <- readxl::excel_sheets(path = filepath)
+  
+  stopifnot(
+    "Company Information" %in% sheet_names,
+    # "Company Ownership" %in% sheet_names,
+    "Company ISINs" %in% sheet_names,
+    "Company Emissions" %in% sheet_names,
+    "Company Activities" %in% sheet_names
+  )
+  
+  company_info <-
+    readxl::read_excel(path = filepath, sheet = "Company Information")
+  
+  # company_ownership <-
+  #   readxl::read_excel(path = filepath, sheet = "Company Ownership") %>%
+  #   filter(.data$`Ownership Level` == 0) %>%
+  #   select(.data$`Company ID`, .data$`Is Ultimate Listed Parent`)
+  
+  company_isins <-
+    readxl::read_excel(path = filepath, sheet = "Company ISINs") %>%
+    group_by(.data$`Company ID`) %>%
+    summarise(ISINs = list(.data$ISIN))
+  
+  company_emissions <-
+    readxl::read_excel(path = filepath, sheet = "Company Emissions") %>%
+    tidyr::pivot_longer(
+      cols = dplyr::matches(" [0-9]{4}$"),
+      names_to = c("consolidation_method", "year"),
+      names_pattern = "^(.*) (20[0-9]{2})$",
+      names_transform = list("year" = as.integer),
+      values_to = "value",
+      values_ptypes = numeric(),
+      values_drop_na = drop_nas
+    ) %>%
+    mutate(value_type = "emission_intensity", .before = "year")
+  
+  company_activities <-
+    readxl::read_excel(path = filepath, sheet = "Company Activities") %>%
+    pivot_longer(
+      cols = dplyr::matches(" [0-9]{4}$"),
+      names_to = c("consolidation_method", "year"),
+      names_pattern = "^(.*) (20[0-9]{2})$",
+      names_transform = list("year" = as.integer),
+      values_to = "value",
+      values_ptypes = numeric(),
+      values_drop_na = drop_nas
+    ) %>%
+    mutate(value_type = "production", .before = "year")
+  
+  output <-
+    company_info %>%
+    # dplyr::full_join(company_ownership, by = "Company ID") %>%
+    dplyr::full_join(company_isins, by = "Company ID") %>%
+    dplyr::right_join(
+      dplyr::bind_rows(company_emissions, company_activities),
+      by = c("Company ID", "Company Name")
+    ) %>%
+    mutate(across(where(is.character), as.factor))
+  
+  if (fix_names) {
+    names(output) <- gsub(" ", "_", tolower(names(output)))
+  }
+  
+  output
+}
 
-# base_pams <- import_ar_advanced_company_indicators(base_pams_path)
-# comparison_pams <- import_ar_advanced_company_indicators(comparison_pams_path)
+base_pams <- import_ar_advanced_company_indicators_no_ownership(base_pams_path)
+comparison_pams <- import_ar_advanced_company_indicators_no_ownership(comparison_pams_path)
 ```
+
+## Data Overview
+
+Provide a brief overview of both datasets:
+
+``` {r summary, echo = FALSE}
+
+# Overview of base_pams
+cat("Summary of base_pams:\n")
+print(head(base_pams))
+
+# Overview of comparison_pams
+cat("\nSummary of comparison_pams:\n")
+print(head(comparison_pams))
+```
+
+## Data Comparison
+We will consider expectations across a variety of axes.
+
+### Expectation 1: Company IDs
+We expect not to lose or gain more than `r company_id_threshold`% of the total original number of Company IDs.
+
+``` {r company_ids, echo = FALSE}
+# Company IDs
+
+# compute unique Company IDs
+base_ids <- unique(base_pams$`Company ID`)
+compare_ids <- unique(comparison_pams$`Company ID`)
+
+# compute the number of IDs lost and gained
+base_count <- length(base_ids)
+lost_count <- length(setdiff(base_ids, compare_ids))
+lost_percent <- 100 *(1 - ((base_count-lost_count)/base_count))
+
+gained_count <- length(setdiff(compare_ids, base_ids))
+gained_percent <- 100 *(1 - ((base_count-gained_count)/base_count))
+
+# state statistics
+if (gained_percent > company_id_threshold) {
+  warning(glue::glue("PAMS gained {round(gained_percent, 2)}% new Company IDs"))
+} else {
+  message(glue::glue("PAMS gained {round(gained_percent, 2)}% new Company IDs"))
+}
+
+if (lost_percent > company_id_threshold) {
+  warning(glue::glue("PAMS lost {round(lost_percent, 2)}% of original Company IDs"))
+} else {
+  message(glue::glue("PAMS lost {round(lost_percent, 2)}% of original Company IDs"))
+}
+
+```
+
+### Expectation 2: Sectoral Production Values
+
+We expect that production values, in aggregate, shouldn't differ by more than `r sectoral_production_threshold`%.
+
+``` {r sectoral_production, echo = FALSE}
+# Calculate the total production values for both datasets
+total_production_base <- base_pams %>% 
+  filter(`Is Ultimate Parent` == TRUE) %>% 
+  filter(consolidation_method == "Direct Ownership") %>% 
+  filter(value_type == "production") %>% 
+  group_by(`Asset Sector`) %>% 
+  summarize(value = sum(value))
+
+total_production_comparison <- comparison_pams %>% 
+  filter(`Is Ultimate Parent` == TRUE) %>% 
+  filter(consolidation_method == "Direct Ownership") %>% 
+  filter(value_type == "production") %>% 
+  group_by(`Asset Sector`) %>% 
+  summarize(value = sum(value))
+
+# Check if the expectation is met
+sector_expectation <- full_join(
+  total_production_base, 
+  total_production_comparison, 
+  by = "Asset Sector",
+  suffix = c("_base", "_comparison")
+) %>% 
+  mutate(
+    difference = 100 * abs(value_base - value_comparison) / value_base
+  )
+
+# Summary
+cat("\nExpectation 2: Production Values\n")
+for (sector in unique(sector_expectation$`Asset Sector`)) {
+  sector_difference <- filter(sector_expectation, `Asset Sector` == sector) %>% pull(difference)
+  
+  if (sector_difference > sectoral_production_threshold) {
+    warning(glue::glue("PAMS total {sector} Production changed by {round(sector_difference, 2)}%"))
+  } else {
+    message(glue::glue("PAMS total {sector} Production changed by {round(sector_difference, 2)}%"))
+  }
+}
+
+```
+
+### Expectation 3: Sectors
+
+We expect that the total possible options for Sector and Technology are identical between the two datasets. If there are any gained or dropped levels here, we want to know about it. 
+
+``` {r sectors, echo = FALSE}
+sectors_base <- unique(base_pams$`Asset Sector`)
+sectors_compare <- unique(comparison_pams$`Asset Sector`)
+
+lost_sectors <- setdiff(sectors_base, sectors_compare)
+gained_sectors <- setdiff(sectors_compare, sectors_base)
+
+if (length(lost_sectors) != 0) {
+  warning(glue::glue("We lost the following sectors: {lost_sectors}"))
+} 
+
+if (length(gained_sectors) != 0) {
+  warning(glue::glue("We gained the following sectors: {gained_sectors}"))
+}
+
+if (length(gained_sectors) == 0 && length(lost_sectors) == 0) {
+  message("Sectors are identical between datasets")
+}
+
+```
+
+### Expectation 4: Technologies
+
+``` {r technologies, echo = FALSE}
+# this expectation assumes no lost or gained sectors
+sectors_base <- unique(base_pams$`Asset Sector`)
+
+for (sector in sectors_base) {
+  technologies_base <- base_pams %>% 
+    filter(`Asset Sector` == sector) %>% 
+    distinct(`Asset Technology`) %>% 
+    pull(`Asset Technology`)
+  
+  technologies_compare <- comparison_pams %>% 
+    filter(`Asset Sector` == sector) %>% 
+    distinct(`Asset Technology`) %>% 
+    pull(`Asset Technology`)
+  
+  lost_technologies <- setdiff(technologies_base, technologies_compare)
+  gained_technologies <- setdiff(technologies_compare, technologies_base)
+  
+  if (length(lost_technologies) != 0) {
+    warning(glue::glue("In the {sector} Sector, we lost the following technologies: {glue_collapse(lost_technologies, ', ', last = ' and ')}"))
+  }
+  
+  if (length(gained_technologies) != 0) {
+    warning(glue::glue("In the {sector} Sector, we gained the following technologies: {glue_collapse(gained_technologies, ', ', last = ' and ')}"))
+  }
+  
+  if (length(gained_technologies) == 0 && length(lost_technologies) == 0) {
+    message(glue::glue("In the {sector} Sector, technologies are identical."))
+  }
+}
+
+```
+
+## Conclusion
+In conclusion, this status report has compared the two datasets, `base_pams` and `comparison_pams`, based on the specified expectations. The summary of each expectation indicates whether it was met or not. If expectations were not met, details of the differences are provided.

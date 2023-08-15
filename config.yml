@@ -1,5 +1,9 @@
 default:
 
     paths:
-        path_pams_base: /PATH/TO/BASE/PAMS.xlsx
-        path_pams_compare: /PATH/TO/COMPARISON/PAMS.xlsx
+        path_pams_base: /PATH/TO/BASE_PAMS.xlsx
+        path_pams_compare: /PATH/TO/COMPARE_PAMS.xlsx
+
+    thresholds:
+        company_id_threshold: 25
+        sectoral_production_threshold: 25
