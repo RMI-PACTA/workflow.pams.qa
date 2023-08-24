@@ -34,10 +34,10 @@ knitr::knit_hooks$set(
 config <- config::get()
 
 # set configs
-base_pams_path <- config$paths$path_pams_base
-comparison_pams_path <- config$paths$path_pams_compare
-company_id_threshold <- config$thresholds$company_id_threshold
-sectoral_production_threshold <- config$thresholds$sectoral_production_threshold
+base_pams_path <- config$compare_pams$paths$path_pams_base
+comparison_pams_path <- config$compare_pams$paths$path_pams_compare
+company_id_threshold <- config$compare_pams$thresholds$company_id_threshold
+sectoral_production_threshold <- config$compare_pams$thresholds$sectoral_production_threshold
 
 library(dplyr)
 library(tibble)

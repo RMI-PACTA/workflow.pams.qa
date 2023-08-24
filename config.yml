@@ -1,9 +1,17 @@
 default:
 
-    paths:
-        path_pams_base: /PATH/TO/BASE_PAMS.xlsx
-        path_pams_compare: /PATH/TO/COMPARE_PAMS.xlsx
+    compare_pams:
+        paths:
+          path_pams_base: /PATH/TO/BASE_PAMS.xlsx
+          path_pams_compare: /PATH/TO/COMPARE_PAMS.xlsx
 
-    thresholds:
-        company_id_threshold: 25
-        sectoral_production_threshold: 25
+        thresholds:
+            company_id_threshold: 25
+            sectoral_production_threshold: 25
+
+    compare_pams_banks_eo:
+        paths:
+            # path_pams: /PATH/TO/PAMS.xlsx
+            # path_banks_eo: /PATH/TO/BANKS_EO.xlsx
+          path_pams: /Users/jacobkastl/Downloads/2023-08-14_AI_RMI_2023Q2/2023-08-14_AI_2023Q2_RMI-Advanced-Indicators.xlsx
+          path_banks_eo: /Users/jacobkastl/Downloads/2023-08-14_AI_RMI_2023Q2/2023-08-14_AI_2023Q2_PACTA for Banks Free dataset_EO.xlsx
