@@ -18,3 +18,13 @@ default:
             share_rows_replicated: 0.99
             relative_tolerance_production: 0.01
             relative_tolerance_emission_factor: 0.01
+
+    compare_pams_banks_fc:
+        paths:
+            path_pams: /PATH/TO/PAMS.xlsx
+            path_banks_fc: /PATH/TO/BANKS_EO.xlsx
+
+        thresholds:
+            share_rows_replicated: 0.99
+            relative_tolerance_production: 0.01
+            relative_tolerance_emission_factor: 0.01
