@@ -1,0 +1,526 @@
+---
+title: "Status Report - Comparison of PAMS and Banks Financial Control"
+author: "Jacob Kastl"
+date: \today
+output: 
+  html_document:
+      toc: true
+      toc_depth: 2
+      theme: flatly
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+knitr::knit_hooks$set(
+   error = function(x, options) {
+     paste('\n\n<div class="alert alert-danger">',
+           gsub('##', '\n', gsub('^##\ Error', '\u2716 **Error**', x)),
+           '</div>', sep = '\n')
+   },
+   warning = function(x, options) {
+     paste('\n\n<div class="alert alert-danger">',
+           gsub('##', '\n', gsub('^##\ Warning:', '\u2716 **Warning**', x)),
+           '</div>', sep = '\n')
+   },
+   message = function(x, options) {
+     paste('\n\n<div class="alert alert-success">',
+           gsub('##', '\n \u2714', x),
+           '</div>', sep = '\n')
+   }
+)
+
+
+config <- config::get()
+
+# set configs
+pams_path <- config$compare_pams_banks_fc$paths$path_pams
+banks_fc_path <- config$compare_pams_banks_fc$paths$path_banks_fc
+
+threshold_rows_replicated <- config$compare_pams_banks_fc$thresholds$share_rows_replicated
+relative_tolerance_production <- config$compare_pams_banks_fc$thresholds$relative_tolerance_production
+relative_tolerance_emission_factor <- config$compare_pams_banks_fc$thresholds$relative_tolerance_emission_factor
+
+library(dplyr)
+library(tibble)
+library(readxl)
+library(tidyr)
+library(glue)
+library(pacta.data.preparation)
+```
+
+## Introduction
+
+This report checks if the PAMS and Banks Financial Control (FC) datasets of a common data release are consistent. For that, it compares two datasets: `pams` and `banks_fc` to ensure data consistency.
+
+In general, it is expected that the Banks Financial Control dataset can be recreated from the PAMS dataset. Beyond minor differences due to rounding, we would expect that it is possible to derive the Banks FC dataset from PAMS after several steps of data wrangling.
+
+We will check if the above expectation holds and gather any incosnsistencies and unexpected patterns.
+
+## Load Data
+
+The PAMS dataset of the 2023Q2 data release can use the import function `pacta.data.preparation::import_ar_advanced_company_indicators()`, which will return a tidy combination of the sheets contained in the PAMS xlsx. The Banks FC file only requires loading one sheet from an xlsx.
+
+```{r import, echo = FALSE}
+comparison_pams <- pacta.data.preparation::import_ar_advanced_company_indicators(pams_path, fix_names = TRUE)
+comparison_banks_fc <- readxl::read_xlsx(banks_fc_path, sheet = "Company Indicators - PACTA Comp")
+```
+
+## Data Overview
+
+Provide a brief overview of both datasets:
+
+``` {r summary, echo = FALSE, include=FALSE}
+
+# Overview of pams
+cat("\nSummary of pams:\n")
+print(head(comparison_pams))
+
+# Overview of banks_fc
+cat("Summary of banks_fc:\n")
+print(head(comparison_banks_fc))
+
+```
+
+## Data Preparation
+We will now wrangle the PAMS dataset to match the Banks FC dataset as closely as possible.
+
+### Step 1: Correct columns and format
+We keep and rename the relevant columns from PAMS needed for Banks FC. And we add a column for the `ald_timestamp`, which is not given in PAMS.
+
+``` {r columns_and_format, echo = FALSE, include=FALSE}
+ald_timestamp <- unique(comparison_banks_fc$ald_timestamp)
+if (length(ald_timestamp) > 1) {
+  stop("Cannot derive the appropriate value for `ald_timestamp` from more than one value.")
+}
+
+pams_to_banks_fc <- comparison_pams %>%
+  dplyr::select(
+    dplyr::all_of(
+      c(
+        "company_id",
+        name_company = "company_name",
+        "lei",
+        is_ultimate_owner = "is_ultimate_parent",
+        sector = "asset_sector",
+        technology = "asset_technology",
+        technology_type = "asset_technology_type",
+        plant_location = "asset_country",
+        "year",
+        "activity_unit",
+        "consolidation_method",
+        "value_type",
+        "value"
+      )
+    )
+  ) %>%
+  dplyr::filter(
+    .data$consolidation_method == "Financial Control"
+  ) %>%
+  dplyr::select(-"consolidation_method") %>%
+  dplyr::mutate(ald_timestamp = .env$ald_timestamp) %>% 
+  dplyr::mutate(
+    lei = as.character(.data$lei),
+    plant_location = as.character(.data$plant_location),
+    activity_unit = as.character(.data$activity_unit)
+  )
+
+```
+
+### Step 2: Formatting to lower case and filter appropriate values
+
+- We format relevant columns to lower case.
+- We only keep the years that are given in the Banks FC dataset.
+- We only keep power capacity, not power generation.
+- We only keep emission intensity values per unit of economic activity, not total emissions.
+
+
+``` {r format_and_filter, echo = FALSE, include=FALSE}
+banks_fc_years <- unique(comparison_banks_fc$year)
+
+pams_to_banks_fc <- pams_to_banks_fc %>%
+  dplyr::mutate(
+    name_company = tolower(.data$name_company),
+    sector = tolower(.data$sector),
+    technology = tolower(.data$technology),
+    technology_type = tolower(.data$technology_type)
+  ) %>%
+  dplyr::filter(.data$year %in% .env$banks_fc_years) %>% 
+  dplyr::filter(!(.data$sector == "power" & .data$activity_unit == "MWh")) %>%
+  dplyr::filter(
+    .data$value_type == "production" | (.data$value_type == "emission_intensity" & grepl("/", .data$activity_unit))
+  )
+
+```
+
+### Step 3: Wrangle production and emission factors into expected format
+
+- `production`, `production_unit`, `emission_factor`, and `emission_factor_unit` are wrangled into wide variables
+- `emission_factor` for any sector that is not evaluated using the SDA approach is set to `NA`
+
+``` {r prod_ef_wide, echo = FALSE, include=FALSE}
+pams_to_banks_fc_production <- pams_to_banks_fc %>%
+  dplyr::filter(.data$value_type == "production") %>%
+  dplyr::select(-"value_type") %>%
+  dplyr::rename(
+    production_unit = "activity_unit",
+    production = "value"
+  )
+
+pams_to_banks_fc_emission_intensity <- pams_to_banks_fc %>%
+  dplyr::filter(.data$value_type == "emission_intensity") %>%
+  dplyr::select(-"value_type") %>%
+  dplyr::rename(
+    emission_factor_unit = "activity_unit",
+    emission_factor = "value"
+  ) %>%
+  dplyr::mutate(
+    emission_factor = dplyr::if_else(
+      .data$sector %in% c("aviation", "cement", "steel"),
+      .data$emission_factor,
+      NA_real_
+    )
+  )
+
+pams_to_banks_fc_merged <- pams_to_banks_fc_production %>%
+  dplyr::full_join(
+    pams_to_banks_fc_emission_intensity,
+    by = c("company_id", "name_company", "lei", "is_ultimate_owner", "sector", "technology", "technology_type", "plant_location", "year", "ald_timestamp")
+  )
+
+```
+
+### Step 4: Map and Filter Sectors & Technologies
+
+- Some sector and technology names need to be renamed and/or mapped to standard PACTA definitions.
+- Shipping sector is removed
+- Natural Gas Liquids is removed from Oil & Gas sector
+- Freight is removed from Aviation sector
+
+``` {r map_filter_sectors_technologies, echo = FALSE, include=FALSE}
+
+pams_to_banks_fc_merged <- pams_to_banks_fc_merged %>%
+  dplyr::mutate(
+    sector = dplyr::case_when(
+      .data$sector == "ldv" ~ "automotive",
+      .data$sector == "oil&gas" ~ "oil and gas",
+      TRUE ~ .data$sector
+    )
+  ) %>%
+  dplyr::mutate(
+    technology = dplyr::case_when(
+      .data$sector == "coal" ~ "coal",
+      .data$technology %in% c(
+        "hybrid no-plug", "ice cng", "ice diesel", "ice e85+", "ice gasoline", "ice propane"
+      ) ~ "ice",
+      .data$technology == "hybrid plug-in" ~ "hybrid",
+      .data$technology %in% c("fuel cell", "ice hydrogen") ~ "fuelcell",
+      .data$technology == "oil and condensate" ~ "oil",
+      TRUE ~ .data$technology
+    )
+  ) %>%
+  dplyr::filter(
+    .data$sector != "shipping",
+    !(.data$sector == "oil and gas" & .data$technology == "natural gas liquids"),
+    !(.data$sector == "aviation" & .data$technology == "freight")
+  )
+
+
+```
+
+### Step 5: Aggregate
+
+- We aggregate production and emission factors to the company-technology-country-year level.
+  - We sum up production
+  - We take a weighted mean of the emission factors, using the porduction for weighting
+
+
+```{r aggregate, echo=FALSE, include=FALSE}
+pams_to_banks_fc_aggregated <- pams_to_banks_fc_merged %>%
+  dplyr::summarise(
+    emission_factor = stats::weighted.mean(.data$emission_factor, w = .data$production, na.rm = TRUE),
+    production = sum(.data$production, na.rm = TRUE),
+    .by = c(
+      "company_id",
+      "name_company",
+      "lei",
+      "is_ultimate_owner",
+      "sector",
+      "technology",
+      "plant_location",
+      "year",
+      "production_unit",
+      "emission_factor_unit",
+      "ald_timestamp"
+    )
+  )
+
+```
+
+### Step 6: Accomodate Banks FC particularieties
+
+The Banks FC data set has a few less than obvious traits that need to be accounted for when replicating it from PAMS:
+
+- For sectors with technology pathways, `emission_factor` is set to `NA`.
+- We remove combinations of company/technology/country that have zero production values over the entire given timeframe.
+- For combinations of company-technology-country that have missing rows in leading years, but positive `production` values in later years, we add rows for the missing leading years and set `production = 0` and `emission_factor = NA_real_`.
+
+```{r particular_wrangling, echo=FALSE, include=FALSE}
+pams_to_banks_fc_complete <- pams_to_banks_fc_aggregated %>%
+  dplyr::mutate(
+    emission_factor = dplyr::if_else(
+      .data$sector %in% c("automotive", "coal", "hdv", "oil and gas", "power"),
+      NA_real_,
+      .data$emission_factor
+    )
+  ) %>%
+  dplyr::mutate(
+    all_zero = dplyr::if_else(sum(.data$production, na.rm = TRUE) == 0, TRUE, FALSE),
+    .by = c("company_id", "lei", "is_ultimate_owner", "sector", "technology", "plant_location", "production_unit", "emission_factor_unit", "ald_timestamp")
+  ) %>%
+  dplyr::filter(!.data$all_zero) %>%
+  dplyr::select(-"all_zero")%>%
+  tidyr::complete(
+    .data$year,
+    tidyr::nesting(
+      company_id,
+      name_company,
+      lei,
+      is_ultimate_owner,
+      sector,
+      technology,
+      plant_location,
+      production_unit,
+      emission_factor_unit,
+      ald_timestamp
+    ),
+    fill = list(
+      production = 0,
+      emission_factor = NA_real_
+    )
+  )
+
+```
+
+## Compare
+
+Finally, we compare how closely the replicated data set matches the Banks FC dataset we received.
+
+We compare across the following dimensions:
+
+- How many rows are successfully replicated?
+- How many rows are given in the PAMS-based replica, but not in the Banks FC dataset?
+- How many rows are given in the Banks FC dataset, but not in the PAMS-based replica?
+- What are the patterns of those rows that were not successfully replicated?
+- Are the production and emission_factor values equal between the successfully replicated rows and the Banks FC dataset?
+- If not, how far off are they?
+
+Note: In assessing the differences, we ignore the differences in names for now, as the formatting steps are not 100% clear beyond changing the names to lower case. We thus only focus on `company_id` for comparison for now.
+
+### Expectation 1: Share of rows successfully replicated
+
+We calculate the percentage difference in production and emission_factor values between the two datasets. We expect that percent difference to be zero or very close to zero (as there are sometimes rounding errors).
+
+
+```{r successfully_replicated, echo=FALSE}
+common_data <- comparison_banks_fc %>%
+  dplyr::inner_join(
+    pams_to_banks_fc_complete,
+    by = c(
+      "company_id", "lei", "is_ultimate_owner", "sector", "technology", "plant_location", "year", "production_unit", "emission_factor_unit", "ald_timestamp"
+    ),
+    suffix = c("_banks", "_replica")
+  ) %>%
+  dplyr::mutate(
+    prod_diff = (production_replica - production_banks) / production_banks,
+    ef_diff = (emission_factor_replica - emission_factor_banks) / emission_factor_banks
+  )
+
+share_rows_replicated <- nrow(common_data) / nrow(comparison_banks_fc)
+
+if (share_rows_replicated < threshold_rows_replicated) {
+    warning(glue::glue("The share of rows from the Banks FC dataset that was successfully replicated, is {round(share_rows_replicated * 100, 3)}%, which is less than the expected minimum threshold of {threshold_rows_replicated * 100}%."))
+}
+  
+if (share_rows_replicated >= threshold_rows_replicated) {
+  message(glue::glue("The share of rows from the Banks FC dataset that was successfully replicated, is {round(share_rows_replicated * 100, 3)}%."))
+}
+
+```
+
+### Expectation 2: Remaining differences due to rounding
+
+Remaining numeric differences in successfully replicated rows for production and emission_factor values are due to rounding, if the replicated values
+
+- for `production` are within `r relative_tolerance_production * 100`% of the original `production` values
+- for `emission_factor` are within `r relative_tolerance_emission_factor * 100`% of the original `emission_factor` values
+
+```{r replicated_rounding, echo=FALSE}
+common_data_rounding <- common_data %>%
+  dplyr::mutate(
+    match_prod = dplyr::if_else(abs(.data$prod_diff) <= relative_tolerance_production, TRUE, FALSE),
+    match_ef = dplyr::if_else(abs(.data$ef_diff) <= relative_tolerance_emission_factor, TRUE, FALSE)
+  )
+
+common_data_summary <- common_data_rounding %>% 
+  dplyr::summarise(
+    sum_rounding_prod = sum(.data$match_prod, na.rm = TRUE),
+    sum_rounding_ef = sum(.data$match_ef, na.rm = TRUE)
+  )
+
+n_prod <- common_data %>% dplyr::filter(!is.na(.data$prod_diff)) %>% nrow()
+n_ef <- common_data %>% dplyr::filter(!is.na(.data$ef_diff)) %>% nrow()
+
+share_rounding_prod <- common_data_summary$sum_rounding_prod / n_prod
+share_rounding_ef <- common_data_summary$sum_rounding_ef / n_ef
+
+common_data_rounding_prod_f <- common_data_rounding %>% 
+  dplyr::filter(!.data$match_prod)
+
+common_data_rounding_ef_f <- common_data_rounding %>% 
+  dplyr::filter(!.data$match_ef)
+
+if (share_rounding_prod < 1) {
+    warning(glue::glue("There are {n_prod - common_data_summary$sum_rounding_prod} replicated rows that have `production` differences larger than the accepted rounding threshold of {relative_tolerance_production * 100}%."))
+  
+  DT::datatable(common_data_rounding_prod_f)
+}
+
+if (share_rounding_prod == 1) {
+  message(glue::glue("All replicated rows have `production` values no no further off from the original value than the accepted rounding threshold of {relative_tolerance_production * 100}%."))
+}
+
+common_data %>%
+  # remove NAs, which can be created when 0 or NA production values are compared.
+  dplyr::filter(!is.na(.data$prod_diff)) %>% 
+  ggplot2::ggplot(ggplot2::aes(x = prod_diff, y = production_banks)) +
+  ggplot2::geom_point() +
+  ggplot2::facet_wrap(~ sector, scales = "free") +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+if (share_rounding_ef < 1) {
+    warning(glue::glue("There are {n_ef - common_data_summary$sum_rounding_ef} replicated rows that have `emission_factor` differences larger than the accepted rounding threshold of {relative_tolerance_emission_factor * 100}%."))
+  
+  DT::datatable(common_data_rounding_ef_f)
+}
+
+if (share_rounding_ef == 1) {
+  message(glue::glue("All replicated rows have `emission_factor` values no further off from the original value than the accepted rounding threshold of {relative_tolerance_emission_factor * 100}%."))
+} 
+
+common_data %>%
+  # remove NaNs, which can be created when NA emission_factor values are compared.
+  dplyr::filter(!is.na(.data$ef_diff)) %>% 
+  ggplot2::ggplot(ggplot2::aes(x = ef_diff, y = emission_factor_banks)) +
+  ggplot2::geom_point() +
+  ggplot2::facet_wrap(~ sector, scales = "free") +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+```
+
+### Expectation 3: Sector totals are equal
+
+We now compare the sectoral production totals and weighted average emission_factor from the Banks FC and the PAMS-based replica.
+
+```{r compare_total, echo=FALSE}
+
+totals_banks_fc <- comparison_banks_fc %>% 
+  dplyr::summarise(
+    emission_factor = stats::weighted.mean(.data$emission_factor, w = .data$production, na.rm = TRUE),
+    production = sum(.data$production, na.rm = TRUE),
+    .by = c("year", "sector")
+  )
+
+totals_pams_replica <- pams_to_banks_fc_complete %>% 
+  dplyr::summarise(
+    emission_factor = stats::weighted.mean(.data$emission_factor, w = .data$production, na.rm = TRUE),
+    production = sum(.data$production, na.rm = TRUE),
+    .by = c("year", "sector")
+  )
+
+sector_totals <- totals_banks_fc %>% 
+  dplyr::inner_join(
+    totals_pams_replica,
+    by = c("sector", "year"),
+    suffix = c("_banks", "_replica")
+  ) %>% 
+  dplyr::mutate(
+    emission_factor_banks = dplyr::if_else(is.nan(.data$emission_factor_banks), NA_real_, .data$emission_factor_banks),
+    emission_factor_replica = dplyr::if_else(is.nan(.data$emission_factor_replica), NA_real_, .data$emission_factor_replica)
+  ) %>% 
+  dplyr::mutate(
+    production_banks = round(.data$production_banks),
+    production_replica = round(.data$production_replica),
+    emission_factor_banks = signif(.data$emission_factor_banks),
+    emission_factor_replica = signif(.data$emission_factor_replica)
+  ) %>% 
+  dplyr::summarise(
+    emission_factor_banks = stats::weighted.mean(.data$emission_factor_banks, w = .data$production_banks, na.rm = TRUE),
+    emission_factor_replica = stats::weighted.mean(.data$emission_factor_replica, w = .data$production_replica, na.rm = TRUE),
+    production_banks = sum(.data$production_banks, na.rm = TRUE),
+    production_replica = sum(.data$production_replica, na.rm = TRUE),
+    .by = c("sector")
+  ) %>% 
+  dplyr::mutate(
+    prod_equal = dplyr::if_else(.data$production_banks == .data$production_replica, TRUE, FALSE),
+    ef_equal = dplyr::if_else(.data$emission_factor_banks == .data$emission_factor_replica, TRUE, FALSE)
+  ) %>% 
+  dplyr::relocate("sector", "production_banks", "production_replica", "prod_equal", "emission_factor_banks", "emission_factor_replica", "ef_equal")
+
+for (i in unique(totals_banks_fc$sector)) {
+  sector_totals_i <- sector_totals %>% 
+    filter(
+      .data$sector == i
+    ) %>% 
+    distinct(.data$prod_equal) %>% 
+    pull()
+  
+  if (is.na(sector_totals_i)) {
+    next()
+  } else if (!sector_totals_i) {
+    warning(glue::glue("In the {i} Sector, there are differences in total production values between the Banks FC and the PAMS replica data sets.}"))
+  } else if (sector_totals_i) {
+    message(glue::glue("In the {i} Sector, total production values are identical between the Banks FC and the PAMS replica data sets."))
+  }
+}
+
+for (i in unique(totals_banks_fc$sector)) {
+  sector_totals_i <- sector_totals %>% 
+    filter(
+      .data$sector == i
+    ) %>% 
+    distinct(.data$ef_equal) %>% 
+    pull()
+  
+  if (is.na(sector_totals_i)) {
+    next()
+  } else if (!sector_totals_i) {
+    warning(glue::glue("In the {i} Sector, there are differences in weighted mean `emission_factor` values between the Banks FC and the PAMS replica data sets.}"))
+  } else if (sector_totals_i) {
+    message(glue::glue("In the {i} Sector, weighted mean `emission_factor` values are identical between the Banks FC and the PAMS replica data sets."))
+  }
+}
+
+
+DT::datatable(sector_totals)
+```
+
+Below, we see a table of cases that shows rows that could not be recreated from PAMS, although they are given in Banks FC. This may explain to some degree the differences between production matches in the replicated data. In any case, these differences may need explanation/investigation from AI.
+
+```{r distinct_data_banks, echo=FALSE}
+distinct_data_banks <- comparison_banks_fc %>%
+  dplyr::anti_join(
+    pams_to_banks_fc_complete,
+    by = c("company_id", "lei", "is_ultimate_owner", "sector", "technology", "plant_location", "year", "production_unit", "emission_factor_unit", "ald_timestamp")
+  )
+
+DT::datatable(distinct_data_banks)
+```
+
+## Conclusion
+
+If all indicators above are green, the data set passes the consistency check. 
+
+If some are red and/or differences are listed, further investigation is needed.
