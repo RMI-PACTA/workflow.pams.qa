@@ -10,6 +10,8 @@ For a comparison of two PAMS datasets over time, paths must be defined that poin
 
 For a consistency check between a PAMS dataset and a Banks Equity Ownership dataset, paths must be defined that point to the relevant datasets as input (for example `PATH/TO/PAMS_2023Q2` and `PATH/TO/BANKS_EO_2023Q2`).
 
+For a consistency check between a PAMS dataset and a Banks Financial Control dataset, paths must be defined that point to the relevant datasets as input (for example `PATH/TO/PAMS_2023Q2` and `PATH/TO/BANKS_FC_2023Q2`).
+
 
 The output will be a `html` report, assessing if various expectations are met, comparing the two datasets. 
 
@@ -31,6 +33,16 @@ default:
         paths:
             path_pams: /PATH/TO/PAMS.xlsx
             path_banks_eo: /PATH/TO/BANKS_EO.xlsx
+
+        thresholds:
+            share_rows_replicated: 0.99
+            relative_tolerance_production: 0.01
+            relative_tolerance_emission_factor: 0.01
+            
+    compare_pams_banks_fc:
+        paths:
+            path_pams: /PATH/TO/PAMS.xlsx
+            path_banks_fc: /PATH/TO/BANKS_EO.xlsx
 
         thresholds:
             share_rows_replicated: 0.99
