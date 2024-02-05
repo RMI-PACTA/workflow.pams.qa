@@ -1,4 +1,9 @@
 # workflow.pams.qa
+
+[![Project Status: Moved to http://example.com – The project has been moved to a new location, and the version at that location should be considered authoritative.](https://www.repostatus.org/badges/latest/moved.svg)](https://www.repostatus.org/#moved) to [`pacta.data.qa`](https://github.com/RMI-PACTA/pacta.data.qa)
+
+**This project is archived for future reference, but no new work is expected in this repository. Future work is expected to be based off  [`pacta.data.qa`](https://github.com/RMI-PACTA/pacta.data.qa).**
+
 This repository is meant to allow users to easily produce `.Rmd` status reports that compares two PAMS datasets or validate the consistency between a PAMS data set and a related data set.
 
 
